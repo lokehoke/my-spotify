@@ -1,0 +1,12 @@
+# Dev-override: docker compose -f docker-compose.yml -f compose.dev.yml up
+services:
+  web:
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+
+  db:
+    ports:
+      - "5432:5432"
