@@ -1,7 +1,9 @@
 [tool.ruff]
 line-length = 100
 target-version = "py313"
-extend-exclude = ["**/migrations/*"]
+# Markdown исключён намеренно: ruff форматирует python-блоки внутри .md, а в
+# ARCHITECTURE.md примеры свёрстаны под чтение, а не под line-length кодовой базы
+extend-exclude = ["**/migrations/*", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
