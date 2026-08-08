@@ -12,18 +12,45 @@
 
 ```bash
 cp .env.example .env   # заполнить SECRET_KEY
-docker compose -f docker-compose.yml -f compose.dev.yml up -d --build
+make up
 ```
 
-После старта: `GET http://localhost:8000/healthz`, `/readyz`, `/api/v1/ping`.
+Без `make`: `docker compose -f docker-compose.yml -f compose.dev.yml up -d --build`.
 
-Структура бекенда — модульный Django-монолит по [ARCHITECTURE.md](ARCHITECTURE.md) §7.1:
-`config/` (настройки base/dev/prod), `apps/core` (healthchecks), `apps/users` (кастомная модель пользователя).
+Поднимаются: `web` (Django), `celery` (фоновые задачи), `db` (PostgreSQL 16),
+`redis-cache` (кэш и троттлинг, allkeys-lru), `redis-queue` (брокер Celery, noeviction).
+
+Полезное: `make test`, `make lint`, `make logs`, `make superuser`, `make migrate`.
+
+Схема API: `http://localhost:8000/api/v1/schema/`, Swagger UI (только в dev): `/api/v1/docs/`.
+
+## API
+
+Служебные: `GET /healthz` (liveness), `GET /readyz` (PostgreSQL + Redis, сюда ходит балансировщик).
+
+| Метод | Путь | Назначение |
+|---|---|---|
+| POST | `/api/v1/auth/register` | регистрация, шлёт письмо верификации |
+| POST | `/api/v1/auth/token` | вход (email + пароль), опционально с блоком `device` |
+| POST | `/api/v1/auth/token/refresh` | ротация refresh-токена |
+| POST | `/api/v1/auth/logout` | отзыв одного refresh-токена |
+| POST | `/api/v1/auth/logout/all` | выход на всех устройствах |
+| POST | `/api/v1/auth/email/verify/request` · `/confirm` | подтверждение email |
+| POST | `/api/v1/auth/password/reset` · `/confirm` | сброс забытого пароля |
+| GET/PATCH/DELETE | `/api/v1/me` | профиль, обновление, удаление аккаунта |
+| GET | `/api/v1/me/export` | выгрузка персональных данных |
+| POST | `/api/v1/me/password` | смена пароля (отзывает все сессии) |
+| GET | `/api/v1/me/devices`, DELETE `/api/v1/me/devices/{id}` | устройства и их отзыв |
+| GET | `/api/v1/me/subscription`, `/api/v1/plans` | подписка и тарифы |
 
 ## Статус
 
-Скелет бекенда: Django 5.2 + DRF + PostgreSQL 16 в Docker Compose, ручки healthcheck работают.
-Дальше по плану: JWT-авторизация, каталог, стриминг, поиск.
+Готов «немузыкальный» контур: аутентификация (JWT с ротацией refresh, детект
+переиспользования токенов, привязка к устройству), профиль, тарифы и подписки,
+верификация email, сброс пароля, удаление аккаунта и экспорт данных.
+Инфраструктура: Docker Compose, Celery, два Redis, CI на GitHub Actions.
+
+Дальше по [ARCHITECTURE.md](ARCHITECTURE.md): каталог, стриминг, поиск.
 
 ## Лицензия
 

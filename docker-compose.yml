@@ -1,11 +1,17 @@
 services:
   web:
-    build: .
+    build:
+      context: .
+      target: prod
     env_file: .env
     ports:
       - "8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
@@ -13,6 +19,24 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+  celery:
+    build:
+      context: .
+      target: prod
+    env_file: .env
+    command: celery -A config worker -l info -Q default
+    depends_on:
+      db:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "celery", "-A", "config", "inspect", "ping", "-d", "celery@$$HOSTNAME"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   db:
     image: postgres:16-alpine
@@ -28,5 +52,28 @@ services:
       timeout: 3s
       retries: 10
 
+  # Кэш и счётчики троттлинга: терять безопасно (ARCHITECTURE.md §5.8)
+  redis-cache:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Брокер Celery: вытеснять задачи нельзя, поэтому noeviction и отдельный инстанс
+  redis-queue:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 128mb --maxmemory-policy noeviction --appendonly yes
+    volumes:
+      - queuedata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   pgdata:
+  queuedata:

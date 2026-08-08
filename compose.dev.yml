@@ -1,7 +1,19 @@
 # Dev-override: docker compose -f docker-compose.yml -f compose.dev.yml up
 services:
   web:
+    build:
+      context: .
+      target: dev
     command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.dev
+
+  celery:
+    build:
+      context: .
+      target: dev
     volumes:
       - .:/app
     environment:
