@@ -1,0 +1,41 @@
+# Override для машин, которые ходят в общий стенд (compose.shared.yml) вместо
+# своего Postgres:
+#   docker compose -f docker-compose.yml -f compose.dev.yml -f compose.lan.yml up -d
+#
+# Redis остаётся локальным у каждого: общий брокер означал бы, что твою
+# Celery-задачу выполнит воркер соседа на своём коде.
+#
+# DATABASE_URL берётся из .env и должен указывать на стенд и на СВОЮ базу из
+# DEV_DATABASES. Если стенд поднят на этой же машине — хост
+# host.docker.internal (внутри контейнера localhost это сам контейнер);
+# если на другой — её адрес в сети.
+
+# host-gateway резолвит хост-машину изнутри контейнера. На Docker Desktop имя
+# есть штатно, на нативном движке в Linux/WSL — нет, поэтому добавляем сами
+x-stand-host: &stand-host
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+services:
+  # Стенд уже держит 5432, локальная база не нужна и конфликтовала бы по порту
+  db: !reset null
+
+  web:
+    # !override обязателен: depends_on — маппинг, и обычный merge оставил бы в
+    # нём ключ db, после чего compose ждал бы удалённый сервис
+    depends_on: !override
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+    <<: *stand-host
+
+  celery:
+    depends_on: !override
+      redis-queue:
+        condition: service_healthy
+    <<: *stand-host
+
+  # depends_on не переопределяем: в базовом файле beat зависит только от redis
+  celery-beat:
+    <<: *stand-host

@@ -1,0 +1,80 @@
+# Общий стенд команды: только то состояние, которое делится между разработчиками.
+# Поднимается один раз на машине-стенде и живёт отдельно от app-стека:
+#   docker compose -f compose.shared.yml up -d
+#
+# Своё имя проекта обязательно: в docker-compose.yml сервис тоже называется db,
+# и без отдельного name контейнеры и томá двух стеков затирали бы друг друга.
+name: my-spotify-shared
+
+# Образ один на сервер и на init: mc лежит внутри серверного образа,
+# отдельный minio/mc тянуть не нужно (и на Docker Hub его больше нет)
+x-minio-image: &minio-image minio/minio:latest
+
+services:
+  # Один инстанс, но по базе на разработчика (см. docker/postgres-init):
+  # миграции каждый катает только в свою базу и соседа не ломает.
+  db:
+    image: postgres:16-alpine
+    environment:
+      # Служебная база суперпользователя; рабочие создаёт init-скрипт
+      POSTGRES_DB: postgres
+      POSTGRES_USER: myspotify
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-myspotify}
+      DEV_DATABASES: ${DEV_DATABASES:-myspotify_loke,myspotify_dev2}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # -d postgres обязателен: без него pg_isready берёт имя базы из имени
+      # пользователя и проверяет несуществующую базу myspotify
+      test: ["CMD-SHELL", "pg_isready -U myspotify -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Замена Cloudflare R2 на время разработки (ARCHITECTURE.md §4.5).
+  # Аудио делится между разработчиками как есть — синхронизировать нечего.
+  minio:
+    # TODO: закрепить release-тег, когда определимся с версией
+    image: *minio-image
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # веб-консоль
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # Одноразовый прогон: заводит бакеты из §4.9 и выходит. Идемпотентен,
+  # поэтому спокойно переживает повторный up.
+  minio-init:
+    image: *minio-image
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    # $$ — экранирование для compose: переменные должен развернуть шелл в контейнере
+    entrypoint: >
+      sh -c "
+      mc alias set stand http://minio:9000 $$MINIO_ROOT_USER $$MINIO_ROOT_PASSWORD &&
+      mc mb --ignore-existing stand/masters stand/audio stand/images &&
+      mc anonymous set download stand/images
+      "
+    restart: "no"
+
+volumes:
+  pgdata:
+  miniodata:
