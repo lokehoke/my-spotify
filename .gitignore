@@ -13,6 +13,13 @@ venv/
 /staticfiles/
 /media/
 
+# Celery
+# beat с дефолтным PersistentScheduler пишет расписание в рабочий каталог,
+# а он в dev примонтирован в контейнер томом — файл оседает в репозитории
+celerybeat-schedule
+celerybeat-schedule.*
+celerybeat.pid
+
 # Env / secrets
 .env
 .env.*

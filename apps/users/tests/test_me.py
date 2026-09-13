@@ -15,9 +15,8 @@ def test_me_returns_profile_and_plan(auth_client, user):
     response = auth_client.get(ME_URL)
     assert response.status_code == 200
     data = response.data
-    assert data["email"] == user.email
+    assert data["username"] == user.username
     assert data["public_id"] == str(user.public_id)
-    assert data["email_verified"] is False
     assert data["profile"]["display_name"] == "Тестовый Юзер"
     assert data["profile"]["preferred_quality"] == "normal"
     assert data["plan"] == "free"
@@ -61,11 +60,11 @@ def test_me_patch_settings_rejects_oversized_payload(auth_client):
     assert "settings" in response.data["error"]["details"]
 
 
-def test_me_patch_cannot_change_email(auth_client, user):
-    response = auth_client.patch(ME_URL, {"email": "hax@example.com"}, format="json")
+def test_me_patch_cannot_change_username(auth_client, user):
+    response = auth_client.patch(ME_URL, {"username": "hax"}, format="json")
     assert response.status_code == 200  # неизвестные поля игнорируются
     user.refresh_from_db()
-    assert user.email != "hax@example.com"
+    assert user.username != "hax"
 
 
 def test_password_change_rejects_weak_new_password(auth_client, user):
@@ -99,13 +98,13 @@ def test_password_change_success(api_client, auth_client, user):
     assert response.status_code == 200  # взамен отозванных выдаётся новая пара токенов
 
     old_login = api_client.post(
-        "/api/v1/auth/token", {"email": user.email, "password": PASSWORD}, format="json"
+        "/api/v1/auth/token", {"username": user.username, "password": PASSWORD}, format="json"
     )
     assert old_login.status_code == 401
 
     new_login = api_client.post(
         "/api/v1/auth/token",
-        {"email": user.email, "password": "N3w-Sup3r-pass!"},
+        {"username": user.username, "password": "N3w-Sup3r-pass!"},
         format="json",
     )
     assert new_login.status_code == 200

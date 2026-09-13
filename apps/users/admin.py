@@ -11,30 +11,30 @@ class ProfileInline(admin.StackedInline):
 
 @admin.register(User)
 class UserAdmin(DjangoUserAdmin):
-    ordering = ("email",)
-    list_display = ("email", "is_staff", "is_active", "date_joined")
-    search_fields = ("email",)
+    ordering = ("username",)
+    list_display = ("username", "is_staff", "is_active", "date_joined")
+    search_fields = ("username",)
     inlines = [ProfileInline]
     filter_horizontal = ("groups", "user_permissions")
     readonly_fields = ("public_id", "last_login", "date_joined")
     fieldsets = (
-        (None, {"fields": ("public_id", "email", "password")}),
+        (None, {"fields": ("public_id", "username", "password")}),
         (
             "Права",
             {"fields": ("is_active", "is_staff", "is_superuser", "groups", "user_permissions")},
         ),
-        ("Даты", {"fields": ("last_login", "date_joined", "email_verified_at")}),
+        ("Даты", {"fields": ("last_login", "date_joined")}),
     )
-    add_fieldsets = ((None, {"classes": ("wide",), "fields": ("email", "password1", "password2")}),)
+    add_fieldsets = (
+        (None, {"classes": ("wide",), "fields": ("username", "password1", "password2")}),
+    )
 
     def save_model(self, request, obj, form, change):
         """Форма админки сохраняет объект напрямую, минуя UserManager, — а профиль
         создаётся именно там. Без этого созданный в админке пользователь ронял
         /me в 500."""
         super().save_model(request, obj, form, change)
-        UserProfile.objects.get_or_create(
-            user=obj, defaults={"display_name": obj.email.split("@")[0]}
-        )
+        UserProfile.objects.get_or_create(user=obj, defaults={"display_name": obj.username})
 
 
 @admin.register(Plan)

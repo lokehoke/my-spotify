@@ -20,10 +20,10 @@ def api_client():
 
 @pytest.fixture
 def create_user(db):
-    def _make(email="user@example.com", password=PASSWORD, display_name="Тестовый Юзер"):
+    def _make(username="listener", password=PASSWORD, display_name="Тестовый Юзер"):
         from apps.users.services import register_user
 
-        return register_user(email=email, password=password, display_name=display_name)
+        return register_user(username=username, password=password, display_name=display_name)
 
     return _make
 
@@ -37,7 +37,7 @@ def user(create_user):
 def tokens(api_client, user):
     response = api_client.post(
         "/api/v1/auth/token",
-        {"email": user.email, "password": PASSWORD},
+        {"username": user.username, "password": PASSWORD},
         format="json",
     )
     assert response.status_code == 200, response.data

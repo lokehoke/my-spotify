@@ -21,7 +21,7 @@ DEVICE = {
 def login_with_device(api_client, user, device=DEVICE):
     return api_client.post(
         TOKEN_URL,
-        {"email": user.email, "password": PASSWORD, "device": device},
+        {"username": user.username, "password": PASSWORD, "device": device},
         format="json",
     )
 
@@ -43,7 +43,7 @@ def test_device_records_real_client_ip_not_spoofed_prefix(api_client, user):
     прислал клиент — записать нужно доверенное значение, а не подставленное."""
     response = api_client.post(
         TOKEN_URL,
-        {"email": user.email, "password": PASSWORD, "device": DEVICE},
+        {"username": user.username, "password": PASSWORD, "device": DEVICE},
         format="json",
         HTTP_X_FORWARDED_FOR="198.51.100.42, 203.0.113.7",  # подделка, реальный IP
     )
@@ -100,7 +100,7 @@ def test_revoke_is_idempotent(api_client, user):
 
 
 def test_cannot_revoke_foreign_device(auth_client, create_user):
-    other = create_user(email="other@example.com")
+    other = create_user(username="other")
     foreign = UserDevice.objects.create(
         user=other, fingerprint=uuid.uuid4(), kind="web", name="Chrome"
     )

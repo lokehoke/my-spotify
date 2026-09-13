@@ -9,7 +9,7 @@ def test_error_envelope_shape(api_client):
     error = response.data["error"]
     assert error["code"] == "validation_error"
     assert error["message"]
-    assert "email" in error["details"]
+    assert "username" in error["details"]
     assert error["request_id"]
 
 
@@ -35,11 +35,11 @@ def test_throttled_error_envelope(api_client):
     for _ in range(10):
         api_client.post(
             "/api/v1/auth/token",
-            {"email": "nobody@example.com", "password": "bad"},
+            {"username": "nobody", "password": "bad"},
             format="json",
         )
     response = api_client.post(
-        "/api/v1/auth/token", {"email": "nobody@example.com", "password": "bad"}, format="json"
+        "/api/v1/auth/token", {"username": "nobody", "password": "bad"}, format="json"
     )
     assert response.status_code == 429
     assert response.data["error"]["code"] == "throttled"

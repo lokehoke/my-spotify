@@ -2,9 +2,6 @@ import json
 import uuid
 
 from django.contrib.auth.password_validation import validate_password
-from django.contrib.auth.tokens import default_token_generator
-from django.utils.encoding import force_str
-from django.utils.http import urlsafe_base64_decode
 from rest_framework import exceptions, serializers
 from rest_framework.throttling import BaseThrottle
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer, TokenRefreshSerializer
@@ -19,20 +16,22 @@ from apps.users.models import (
     User,
     UserDevice,
     UserProfile,
+    username_validator,
 )
 
 SETTINGS_MAX_BYTES = 4096
 
 
 class RegisterSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-    password = serializers.CharField(write_only=True, trim_whitespace=False)
-    display_name = serializers.CharField(max_length=120)
+    """Регистрация — только логин и пароль: почтового контура в MVP нет."""
 
-    def validate_email(self, value: str) -> str:
-        value = value.lower()
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("Пользователь с таким email уже существует.")
+    username = serializers.CharField(max_length=32, validators=[username_validator])
+    password = serializers.CharField(write_only=True, trim_whitespace=False)
+
+    def validate_username(self, value: str) -> str:
+        value = User.normalize_username(value)
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("Пользователь с таким логином уже существует.")
         return value
 
     def validate_password(self, value: str) -> str:
@@ -50,8 +49,8 @@ class DeviceInputSerializer(serializers.Serializer):
     app_version = serializers.CharField(max_length=32, required=False, allow_blank=True, default="")
 
 
-class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
-    """Логин по email; опциональный блок device регистрирует устройство и вшивает
+class UsernameTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """Вход по логину; опциональный блок device регистрирует устройство и вшивает
     device_id в refresh (ARCHITECTURE.md §5.7: отзыв устройства инвалидирует его токен).
     """
 
@@ -65,7 +64,9 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
         return token
 
     def validate(self, attrs):
-        attrs[self.username_field] = attrs[self.username_field].lower()
+        # Ровно та же нормализация, что и при записи: иначе вход логином в другом
+        # регистре не нашёл бы аккаунт
+        attrs[self.username_field] = User.normalize_username(attrs[self.username_field])
         device_data = attrs.pop("device", None)
         data = super().validate(attrs)
         data["access_expires_in"] = tokens.access_lifetime_seconds()
@@ -100,7 +101,7 @@ class DeviceAwareTokenRefreshSerializer(TokenRefreshSerializer):
 
         user = User.objects.filter(pk=payload.get("user_id")).first()
 
-        # 1. Версия токенов: смена/сброс пароля и «выйти везде» гасят всё разом.
+        # 1. Версия токенов: смена пароля и «выйти везде» гасят всё разом.
         if user is None or payload.get(tokens.TOKEN_VERSION_CLAIM) != user.token_version:
             raise exceptions.AuthenticationFailed("Токен отозван.", code="token_revoked")
 
@@ -166,15 +167,11 @@ class ProfileSerializer(serializers.ModelSerializer):
 
 class MeSerializer(serializers.ModelSerializer):
     profile = ProfileSerializer()
-    email_verified = serializers.SerializerMethodField()
     plan = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["public_id", "email", "email_verified", "date_joined", "profile", "plan"]
-
-    def get_email_verified(self, obj) -> bool:
-        return obj.email_verified_at is not None
+        fields = ["public_id", "username", "date_joined", "profile", "plan"]
 
     def get_plan(self, obj) -> str:
         from apps.users import selectors
@@ -193,47 +190,6 @@ class PasswordChangeSerializer(serializers.Serializer):
 
     def validate_new_password(self, value: str) -> str:
         validate_password(value, user=self.context["request"].user)
-        return value
-
-
-class PasswordResetRequestSerializer(serializers.Serializer):
-    email = serializers.EmailField()
-
-    def validate_email(self, value: str) -> str:
-        return value.lower()
-
-
-class PasswordResetConfirmSerializer(serializers.Serializer):
-    uid = serializers.CharField()
-    token = serializers.CharField()
-    new_password = serializers.CharField(write_only=True, trim_whitespace=False)
-
-    def validate(self, attrs):
-        try:
-            pk = force_str(urlsafe_base64_decode(attrs["uid"]))
-            user = User.objects.get(pk=pk, is_active=True)
-        except (ValueError, TypeError, User.DoesNotExist):
-            raise serializers.ValidationError({"uid": ["Ссылка недействительна."]}) from None
-
-        if not default_token_generator.check_token(user, attrs["token"]):
-            raise serializers.ValidationError({"token": ["Ссылка недействительна или истекла."]})
-
-        validate_password(attrs["new_password"], user=user)
-        attrs["user"] = user
-        return attrs
-
-
-class EmailVerifyConfirmSerializer(serializers.Serializer):
-    token = serializers.CharField()
-
-    def validate_token(self, value: str) -> str:
-        public_id = tokens.read_email_verify_token(value)
-        if public_id is None:
-            raise serializers.ValidationError("Ссылка недействительна или истекла.")
-        user = User.objects.filter(public_id=public_id, is_active=True).first()
-        if user is None:
-            raise serializers.ValidationError("Ссылка недействительна или истекла.")
-        self.context["target_user"] = user
         return value
 
 

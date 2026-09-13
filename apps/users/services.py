@@ -7,20 +7,22 @@ from apps.users import tokens
 from apps.users.models import ChainRevocationReason, User, UserDevice, UserProfile
 
 
-class EmailAlreadyTaken(Exception):
-    """Email занят — гонка между проверкой уникальности и вставкой."""
+class UsernameAlreadyTaken(Exception):
+    """Логин занят — гонка между проверкой уникальности и вставкой."""
 
 
 @transaction.atomic
-def register_user(*, email: str, password: str, display_name: str) -> User:
-    """Уникальность email проверяется сериализатором, но между проверкой и
+def register_user(*, username: str, password: str, display_name: str = "") -> User:
+    """Уникальность логина проверяется сериализатором, но между проверкой и
     вставкой проходит хэширование пароля — на этом окне два параллельных
     запроса могут разойтись, поэтому источником истины остаётся БД.
     """
     try:
-        return User.objects.create_user(email=email, password=password, display_name=display_name)
+        return User.objects.create_user(
+            username=username, password=password, display_name=display_name
+        )
     except IntegrityError as exc:
-        raise EmailAlreadyTaken from exc
+        raise UsernameAlreadyTaken from exc
 
 
 @transaction.atomic
@@ -31,14 +33,6 @@ def change_password(*, user: User, new_password: str) -> None:
     user.set_password(new_password)
     user.save(update_fields=["password"])
     tokens.revoke_all_tokens(user)
-
-
-@transaction.atomic
-def confirm_email(*, user: User) -> User:
-    if user.email_verified_at is None:
-        user.email_verified_at = timezone.now()
-        user.save(update_fields=["email_verified_at"])
-    return user
 
 
 def logout_everywhere(*, user: User) -> None:

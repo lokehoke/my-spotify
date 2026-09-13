@@ -5,7 +5,7 @@
 * **цепочка** (claim `cid`) — одна последовательность refresh-токенов, порождённая
   одним входом. Гасится при выходе на устройстве и при детекте кражи;
 * **все токены пользователя** (claim `tv`, поле User.token_version) — гасятся при
-  смене и сбросе пароля и при явном «выйти везде».
+  смене пароля и при явном «выйти везде».
 
 Access-токен намеренно НЕ проверяется по БД: он живёт 15 минут и валидируется
 подписью без I/O. Отзыв убивает refresh-цепочки — доступ прекращается в пределах
@@ -14,7 +14,6 @@ Access-токен намеренно НЕ проверяется по БД: он
 
 import uuid
 
-from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
 from django.db.models import F
 from django.utils import timezone
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
@@ -30,9 +29,6 @@ CHAIN_CLAIM = "cid"
 # таймаута, возврат приложения из фона несколькими запросами сразу). В этом окне
 # повтор считается гонкой, а не кражей: отвечаем 401, но ничего не отзываем.
 REUSE_GRACE_SECONDS = 10
-
-EMAIL_VERIFY_SALT = "users.email-verify"
-EMAIL_VERIFY_TTL = 60 * 60 * 24  # 24 часа
 
 
 def access_lifetime_seconds() -> int:
@@ -119,15 +115,3 @@ def revoke_all_tokens(user) -> None:
         [BlacklistedToken(token_id=pk) for pk in pending.values_list("id", flat=True)],
         ignore_conflicts=True,
     )
-
-
-def make_email_verify_token(user) -> str:
-    return TimestampSigner(salt=EMAIL_VERIFY_SALT).sign(str(user.public_id))
-
-
-def read_email_verify_token(token: str) -> str | None:
-    """Возвращает public_id пользователя или None, если токен битый/протух."""
-    try:
-        return TimestampSigner(salt=EMAIL_VERIFY_SALT).unsign(token, max_age=EMAIL_VERIFY_TTL)
-    except (BadSignature, SignatureExpired):
-        return None

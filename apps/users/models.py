@@ -1,10 +1,21 @@
 import uuid
 
+from django.apps import apps
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.core.validators import RegexValidator
 from django.db import models
 from django.utils import timezone
 
 from apps.core.models import TimeStampedModel
+
+# Логин намеренно только ASCII: кириллица в идентификаторе даёт неразличимые
+# глазом аккаунты (латинская `a` против кириллической `а`), а NFKC их не
+# схлопывает. Отображаемое имя в профиле при этом любое.
+username_validator = RegexValidator(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]{2,31}\Z",
+    "Логин: 3–32 символа — латиница, цифры, точка, дефис, подчёркивание; "
+    "начинается с буквы или цифры.",
+)
 
 
 class Quality(models.TextChoices):
@@ -16,55 +27,77 @@ class Quality(models.TextChoices):
 class UserManager(BaseUserManager):
     use_in_migrations = True
 
-    def _create_user(self, email, password, display_name="", **extra_fields):
-        if not email:
-            raise ValueError("Email обязателен")
-        # Регистронезависимая уникальность: нормализация в lowercase
-        # (вместо citext из DDL — рекомендация Django после депрекации CITextField)
-        email = self.normalize_email(email).lower()
-        user = self.model(email=email, **extra_fields)
+    def _create_user(self, username, password, display_name="", **extra_fields):
+        if not username:
+            raise ValueError("Логин обязателен")
+        # save() не вызывает clean(), поэтому нормализуем здесь явно. Класс берём
+        # через apps.get_model, как это делает UserManager Django: в миграциях
+        # self.model — историческая модель, у которой методов класса нет
+        user_model = apps.get_model(self.model._meta.app_label, self.model._meta.object_name)
+        username = user_model.normalize_username(username)
+        user = self.model(username=username, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         # Профиль создаётся всегда, включая createsuperuser: код читает user.profile
         # без проверок, отсутствие строки давало бы 500
-        UserProfile.objects.create(user=user, display_name=display_name or email.split("@")[0])
+        UserProfile.objects.create(user=user, display_name=display_name or username)
         return user
 
-    def create_user(self, email, password=None, **extra_fields):
+    def create_user(self, username, password=None, **extra_fields):
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
-        return self._create_user(email, password, **extra_fields)
+        return self._create_user(username, password, **extra_fields)
 
-    def create_superuser(self, email, password=None, **extra_fields):
+    def create_superuser(self, username, password=None, **extra_fields):
         extra_fields.setdefault("is_staff", True)
         extra_fields.setdefault("is_superuser", True)
-        return self._create_user(email, password, **extra_fields)
+        return self._create_user(username, password, **extra_fields)
 
 
 class User(AbstractBaseUser, PermissionsMixin):
-    """ARCHITECTURE.md §5.2: логин по email; наружу в API отдаётся только public_id."""
+    """Вход по логину и паролю; наружу в API отдаётся только public_id.
+
+    Отклонение от ARCHITECTURE.md §5.2, где идентификатором был email: почтовый
+    контур (верификация адреса, сброс пароля письмом) убран из MVP целиком, а
+    вместе с ним и само поле email. Возврат доступа при забытом пароле теперь
+    возможен только руками админа — до появления 2FA с recovery-кодами.
+    """
 
     public_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
-    email = models.EmailField(unique=True)
+    username = models.CharField(max_length=32, unique=True, validators=[username_validator])
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
-    email_verified_at = models.DateTimeField(null=True, blank=True)
     date_joined = models.DateTimeField(default=timezone.now)
-    # Версия токенов: попадает claim'ом "tv" в refresh. Инкремент мгновенно убивает
-    # все refresh-цепочки пользователя (смена/сброс пароля, logout-all, детект
+    # Версия токенов: попадает claim-ом "tv" в refresh. Инкремент мгновенно убивает
+    # все refresh-цепочки пользователя (смена пароля, logout-all, детект
     # переиспользования ротированного токена — ARCHITECTURE.md §7.4)
     token_version = models.PositiveIntegerField(default=0)
 
     objects = UserManager()
 
-    USERNAME_FIELD = "email"
+    USERNAME_FIELD = "username"
     REQUIRED_FIELDS = []
 
     class Meta:
         db_table = "users"
 
     def __str__(self):
-        return self.email
+        return self.username
+
+    @classmethod
+    def normalize_username(cls, username):
+        """Регистронезависимая уникальность логина.
+
+        AbstractBaseUser.clean() прогоняет USERNAME_FIELD через этот метод, а
+        clean() отрабатывает на всех путях записи через формы — включая форму
+        админки, которая сохраняет объект мимо UserManager. Без нормализации
+        заведённый в админке `Loke` не нашёлся бы при входе как `loke`, а рядом
+        ужился бы второй аккаунт, отличающийся только регистром. clean() идёт до
+        проверки уникальности формы, поэтому такой дубль даёт ошибку валидации,
+        а не IntegrityError.
+        """
+        username = super().normalize_username(username)
+        return username.lower() if isinstance(username, str) else username
 
 
 class UserProfile(models.Model):

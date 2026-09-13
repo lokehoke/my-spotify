@@ -11,7 +11,7 @@ TOKEN_URL = "/api/v1/auth/token"
 
 def attempt(api_client, **extra):
     return api_client.post(
-        TOKEN_URL, {"email": "nobody@example.com", "password": "bad-pass"}, format="json", **extra
+        TOKEN_URL, {"username": "nobody", "password": "bad-pass"}, format="json", **extra
     )
 
 
@@ -31,6 +31,6 @@ def test_throttle_fails_open_when_cache_is_down(api_client, user):
 
     with mock.patch("django.core.cache.cache.get", side_effect=ConnectionError):
         response = api_client.post(
-            TOKEN_URL, {"email": user.email, "password": PASSWORD}, format="json"
+            TOKEN_URL, {"username": user.username, "password": PASSWORD}, format="json"
         )
     assert response.status_code == 200

@@ -1,8 +1,4 @@
-import logging
-
-from django.shortcuts import get_object_or_404
-from kombu.exceptions import OperationalError as BrokerUnavailable
-from rest_framework import generics, serializers, status
+from rest_framework import exceptions, generics, serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -10,34 +6,19 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.core.throttling import ScopedRateThrottle
-from apps.users import selectors, services, tasks, tokens
-from apps.users.models import Plan, User, UserDevice
+from apps.users import selectors, services, tokens
 from apps.users.serializers import (
     AccountDeleteSerializer,
     DeviceAwareTokenRefreshSerializer,
     DeviceSerializer,
-    EmailTokenObtainPairSerializer,
-    EmailVerifyConfirmSerializer,
     MeSerializer,
     PasswordChangeSerializer,
-    PasswordResetConfirmSerializer,
-    PasswordResetRequestSerializer,
     PlanSerializer,
     ProfileSerializer,
     RegisterSerializer,
     SubscriptionSerializer,
+    UsernameTokenObtainPairSerializer,
 )
-
-logger = logging.getLogger(__name__)
-
-
-def enqueue_email(task, *args) -> None:
-    """Письмо — не критичный путь: недоступность брокера не должна валить
-    регистрацию или запрос сброса пароля 500-й ошибкой."""
-    try:
-        task.delay(*args)
-    except BrokerUnavailable:
-        logger.exception("Не удалось поставить письмо в очередь: %s", task.name)
 
 
 class RegisterView(APIView):
@@ -50,19 +31,18 @@ class RegisterView(APIView):
         serializer.is_valid(raise_exception=True)
         try:
             user = serializer.save()
-        except services.EmailAlreadyTaken:
+        except services.UsernameAlreadyTaken:
             raise serializers.ValidationError(
-                {"email": ["Пользователь с таким email уже существует."]}
+                {"username": ["Пользователь с таким логином уже существует."]}
             ) from None
-        enqueue_email(tasks.send_email_verification, user.id)
         return Response(
-            {"public_id": str(user.public_id), "email": user.email},
+            {"public_id": str(user.public_id), "username": user.username},
             status=status.HTTP_201_CREATED,
         )
 
 
 class TokenObtainView(TokenObtainPairView):
-    serializer_class = EmailTokenObtainPairSerializer
+    serializer_class = UsernameTokenObtainPairSerializer
     throttle_classes = [ScopedRateThrottle]
     throttle_scope = "auth"
 
@@ -99,59 +79,6 @@ class LogoutAllView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class EmailVerifyRequestView(APIView):
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "email"
-
-    def post(self, request):
-        if request.user.email_verified_at is None:
-            enqueue_email(tasks.send_email_verification, request.user.id)
-        return Response(status=status.HTTP_202_ACCEPTED)
-
-
-class EmailVerifyConfirmView(APIView):
-    permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "auth"
-
-    def post(self, request):
-        serializer = EmailVerifyConfirmSerializer(data=request.data, context={})
-        serializer.is_valid(raise_exception=True)
-        services.confirm_email(user=serializer.context["target_user"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-class PasswordResetRequestView(APIView):
-    permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "email"
-
-    def post(self, request):
-        serializer = PasswordResetRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = User.objects.filter(email=serializer.validated_data["email"], is_active=True).first()
-        if user is not None:
-            enqueue_email(tasks.send_password_reset, user.id)
-        # Ответ одинаков независимо от существования аккаунта: иначе эндпоинт
-        # превращается в проверялку «есть ли такой email в сервисе»
-        return Response(status=status.HTTP_202_ACCEPTED)
-
-
-class PasswordResetConfirmView(APIView):
-    permission_classes = [AllowAny]
-    throttle_classes = [ScopedRateThrottle]
-    throttle_scope = "auth"
-
-    def post(self, request):
-        serializer = PasswordResetConfirmSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        services.change_password(
-            user=serializer.validated_data["user"],
-            new_password=serializer.validated_data["new_password"],
-        )
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-
 class MeView(APIView):
     def get(self, request):
         return Response(MeSerializer(request.user).data)
@@ -179,9 +106,9 @@ class MeExportView(APIView):
         return Response(
             {
                 "account": MeSerializer(user).data,
-                "devices": DeviceSerializer(user.devices.all(), many=True).data,
+                "devices": DeviceSerializer(selectors.list_devices(user), many=True).data,
                 "subscriptions": SubscriptionSerializer(
-                    user.subscriptions.select_related("plan").all(), many=True
+                    selectors.list_subscriptions(user), many=True
                 ).data,
                 "active_subscription": (
                     SubscriptionSerializer(subscription).data if subscription else None
@@ -199,7 +126,7 @@ class PasswordChangeView(APIView):
         device = None
         device_id = (request.auth.payload if request.auth else {}).get(tokens.DEVICE_CLAIM)
         if device_id is not None:
-            device = UserDevice.objects.filter(id=device_id, user=request.user).first()
+            device = selectors.get_device(user=request.user, device_id=device_id)
 
         services.change_password(
             user=request.user, new_password=serializer.validated_data["new_password"]
@@ -214,12 +141,14 @@ class DeviceListView(generics.ListAPIView):
     pagination_class = None  # устройств — единицы
 
     def get_queryset(self):
-        return self.request.user.devices.order_by("-last_seen_at")
+        return selectors.list_devices(self.request.user)
 
 
 class DeviceRevokeView(APIView):
     def delete(self, request, pk: int):
-        device = get_object_or_404(UserDevice, pk=pk, user=request.user)
+        device = selectors.get_device(user=request.user, device_id=pk)
+        if device is None:
+            raise exceptions.NotFound()
         services.revoke_device(device=device)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -228,7 +157,9 @@ class PlanListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = PlanSerializer
     pagination_class = None
-    queryset = Plan.objects.filter(is_active=True).order_by("price_cents")
+
+    def get_queryset(self):
+        return selectors.list_active_plans()
 
 
 class MySubscriptionView(APIView):

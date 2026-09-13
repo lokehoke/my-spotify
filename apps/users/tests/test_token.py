@@ -10,7 +10,7 @@ REFRESH_URL = "/api/v1/auth/token/refresh"
 
 def test_token_obtain_success(api_client, user):
     response = api_client.post(
-        TOKEN_URL, {"email": user.email, "password": PASSWORD}, format="json"
+        TOKEN_URL, {"username": user.username, "password": PASSWORD}, format="json"
     )
     assert response.status_code == 200
     assert response.data["access"]
@@ -20,7 +20,7 @@ def test_token_obtain_success(api_client, user):
 
 def test_token_obtain_wrong_password(api_client, user):
     response = api_client.post(
-        TOKEN_URL, {"email": user.email, "password": "wrong-pass-1"}, format="json"
+        TOKEN_URL, {"username": user.username, "password": "wrong-pass-1"}, format="json"
     )
     assert response.status_code == 401
     assert response.data["error"]["code"] == "no_active_account"
@@ -30,7 +30,7 @@ def test_token_obtain_inactive_user(api_client, user):
     user.is_active = False
     user.save(update_fields=["is_active"])
     response = api_client.post(
-        TOKEN_URL, {"email": user.email, "password": PASSWORD}, format="json"
+        TOKEN_URL, {"username": user.username, "password": PASSWORD}, format="json"
     )
     assert response.status_code == 401
 
@@ -88,9 +88,11 @@ def test_logout_requires_refresh_field(auth_client):
 def test_auth_throttle_returns_429(api_client, user):
     """Scope auth: 10/min (§7.9) — 11-я попытка логина упирается в троттлинг."""
     for _ in range(10):
-        api_client.post(TOKEN_URL, {"email": user.email, "password": "bad-pass"}, format="json")
+        api_client.post(
+            TOKEN_URL, {"username": user.username, "password": "bad-pass"}, format="json"
+        )
     response = api_client.post(
-        TOKEN_URL, {"email": user.email, "password": "bad-pass"}, format="json"
+        TOKEN_URL, {"username": user.username, "password": "bad-pass"}, format="json"
     )
     assert response.status_code == 429
     assert response.data["error"]["code"] == "throttled"

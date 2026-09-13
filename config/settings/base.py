@@ -105,7 +105,6 @@ REST_FRAMEWORK = {
         "anon": "100/min",
         "user": "1000/hour",
         "auth": "10/min",
-        "email": "5/hour",  # отправка писем: верификация и сброс пароля
     },
 }
 
@@ -154,10 +153,6 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": crontab(hour=3, minute=30),
     },
 }
-
-DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", default="noreply@example.com")
-# Базовый URL веб-клиента: из него собираются ссылки в письмах
-FRONTEND_URL = env("FRONTEND_URL", default="http://localhost:3000")
 
 LANGUAGE_CODE = "ru-ru"
 TIME_ZONE = "UTC"

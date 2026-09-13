@@ -33,7 +33,7 @@ def age_blacklist_entries():
 
 def login(api_client, user, **extra):
     return api_client.post(
-        TOKEN_URL, {"email": user.email, "password": PASSWORD, **extra}, format="json"
+        TOKEN_URL, {"username": user.username, "password": PASSWORD, **extra}, format="json"
     ).data
 
 

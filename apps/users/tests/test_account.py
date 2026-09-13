@@ -55,7 +55,7 @@ def test_export_returns_personal_data(auth_client, user):
     )
     response = auth_client.get("/api/v1/me/export")
     assert response.status_code == 200
-    assert response.data["account"]["email"] == user.email
+    assert response.data["account"]["username"] == user.username
     assert len(response.data["devices"]) == 1
     assert response.data["devices"][0]["name"] == "iPhone"
     assert response.data["subscriptions"] == []
@@ -67,7 +67,7 @@ def test_export_requires_auth(api_client):
 
 
 def test_export_does_not_leak_other_users(auth_client, create_user):
-    other = create_user(email="other@example.com")
+    other = create_user(username="other")
     UserDevice.objects.create(
         user=other, fingerprint="11111111-1111-1111-1111-111111111111", kind="web"
     )
@@ -78,14 +78,14 @@ def test_export_does_not_leak_other_users(auth_client, create_user):
 def test_superuser_has_profile(db):
     """createsuperuser не проходит через register_user — профиль всё равно нужен,
     иначе GET /me падает 500."""
-    admin = User.objects.create_superuser(email="admin@example.com", password=PASSWORD)
+    admin = User.objects.create_superuser(username="admin", password=PASSWORD)
     assert admin.profile.display_name == "admin"
 
 
 def test_me_works_for_superuser(api_client, db):
-    User.objects.create_superuser(email="admin@example.com", password=PASSWORD)
+    User.objects.create_superuser(username="admin", password=PASSWORD)
     tokens = api_client.post(
-        "/api/v1/auth/token", {"email": "admin@example.com", "password": PASSWORD}, format="json"
+        "/api/v1/auth/token", {"username": "admin", "password": PASSWORD}, format="json"
     ).data
     api_client.credentials(HTTP_AUTHORIZATION=f"Bearer {tokens['access']}")
     response = api_client.get(ME_URL)
