@@ -1,8 +1,7 @@
 import logging
 
-from django.shortcuts import get_object_or_404
 from kombu.exceptions import OperationalError as BrokerUnavailable
-from rest_framework import generics, serializers, status
+from rest_framework import exceptions, generics, serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -11,7 +10,6 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 
 from apps.core.throttling import ScopedRateThrottle
 from apps.users import selectors, services, tasks, tokens
-from apps.users.models import Plan, User, UserDevice
 from apps.users.serializers import (
     AccountDeleteSerializer,
     DeviceAwareTokenRefreshSerializer,
@@ -129,7 +127,7 @@ class PasswordResetRequestView(APIView):
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = User.objects.filter(email=serializer.validated_data["email"], is_active=True).first()
+        user = selectors.get_active_user_by_email(serializer.validated_data["email"])
         if user is not None:
             enqueue_email(tasks.send_password_reset, user.id)
         # Ответ одинаков независимо от существования аккаунта: иначе эндпоинт
@@ -179,9 +177,9 @@ class MeExportView(APIView):
         return Response(
             {
                 "account": MeSerializer(user).data,
-                "devices": DeviceSerializer(user.devices.all(), many=True).data,
+                "devices": DeviceSerializer(selectors.list_devices(user), many=True).data,
                 "subscriptions": SubscriptionSerializer(
-                    user.subscriptions.select_related("plan").all(), many=True
+                    selectors.list_subscriptions(user), many=True
                 ).data,
                 "active_subscription": (
                     SubscriptionSerializer(subscription).data if subscription else None
@@ -199,7 +197,7 @@ class PasswordChangeView(APIView):
         device = None
         device_id = (request.auth.payload if request.auth else {}).get(tokens.DEVICE_CLAIM)
         if device_id is not None:
-            device = UserDevice.objects.filter(id=device_id, user=request.user).first()
+            device = selectors.get_device(user=request.user, device_id=device_id)
 
         services.change_password(
             user=request.user, new_password=serializer.validated_data["new_password"]
@@ -214,12 +212,14 @@ class DeviceListView(generics.ListAPIView):
     pagination_class = None  # устройств — единицы
 
     def get_queryset(self):
-        return self.request.user.devices.order_by("-last_seen_at")
+        return selectors.list_devices(self.request.user)
 
 
 class DeviceRevokeView(APIView):
     def delete(self, request, pk: int):
-        device = get_object_or_404(UserDevice, pk=pk, user=request.user)
+        device = selectors.get_device(user=request.user, device_id=pk)
+        if device is None:
+            raise exceptions.NotFound()
         services.revoke_device(device=device)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -228,7 +228,9 @@ class PlanListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = PlanSerializer
     pagination_class = None
-    queryset = Plan.objects.filter(is_active=True).order_by("price_cents")
+
+    def get_queryset(self):
+        return selectors.list_active_plans()
 
 
 class MySubscriptionView(APIView):

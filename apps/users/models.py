@@ -16,12 +16,22 @@ class Quality(models.TextChoices):
 class UserManager(BaseUserManager):
     use_in_migrations = True
 
+    @classmethod
+    def normalize_email(cls, email):
+        """Регистронезависимая уникальность: нормализация адреса в lowercase
+        целиком (вместо citext из DDL — рекомендация Django после депрекации
+        CITextField).
+
+        Django штатно опускает регистр только у домена, потому что local-part по
+        RFC регистрозависима. Нам нужен весь адрес: логин ищет пользователя по
+        lowercase-email, и адрес со «своим» регистром просто не нашёлся бы.
+        """
+        return super().normalize_email(email).lower()
+
     def _create_user(self, email, password, display_name="", **extra_fields):
         if not email:
             raise ValueError("Email обязателен")
-        # Регистронезависимая уникальность: нормализация в lowercase
-        # (вместо citext из DDL — рекомендация Django после депрекации CITextField)
-        email = self.normalize_email(email).lower()
+        email = self.normalize_email(email)
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
@@ -65,6 +75,19 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.email
+
+    def clean(self):
+        """Нормализация email на путях записи через формы.
+
+        Менеджер нормализует адрес сам, но форма админки сохраняет объект
+        напрямую, минуя его: без этого заведённый в админке `User@Example.com`
+        оставался бы в базе в своём регистре и не находился при входе, а рядом
+        с ним мог бы ужиться второй адрес, отличающийся только регистром.
+        clean() отрабатывает до проверки уникальности формы, поэтому дубль даёт
+        понятную ошибку валидации, а не IntegrityError.
+        """
+        super().clean()
+        self.email = type(self).objects.normalize_email(self.email)
 
 
 class UserProfile(models.Model):
